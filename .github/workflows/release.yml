@@ -1,0 +1,47 @@
+name: release
+
+# Publishes the wrapper binaries with SHA256SUMS and a GitHub build-provenance
+# attestation (SLSA build level 2, Sigstore). Releases are tagged vX.Y.Z of this
+# repository; the binaries report "<upstream version>+kmip.<X.Y.Z>".
+#
+# NOTE: untested until the first tag is pushed. Everything it runs except the
+# last two steps (attest, publish) is exercised by ci.yml on every push.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write # create the GitHub release
+      id-token: write # OIDC token Sigstore signs the attestation with
+      attestations: write # store the attestation
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - run: make check-generated test verify-pipeline repro-check depdelta
+      - name: Stage release assets under flat names and checksum them
+        run: |
+          mkdir release
+          cp dist/step-ca_linux_amd64/step-ca release/step-ca_linux_amd64
+          cp dist/step-ca_linux_armv7l/step-ca release/step-ca_linux_armv7l
+          cp dist/step-kms-plugin_linux_amd64/step-kms-plugin release/step-kms-plugin_linux_amd64
+          (cd release && sha256sum step-ca_linux_* step-kms-plugin_linux_* > SHA256SUMS)
+          cat release/SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-checksums: release/SHA256SUMS
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* \
+            --verify-tag \
+            --title "$GITHUB_REF_NAME" \
+            --notes "step-ca $(dist/step-ca_linux_amd64/step-ca version | head -1). Verify with: gh attestation verify <file> --repo $GITHUB_REPOSITORY"

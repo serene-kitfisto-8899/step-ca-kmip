@@ -1,0 +1,55 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# The Go toolchain is not set up with actions/setup-go on purpose: the Makefile
+# and build scripts export GOTOOLCHAIN from the `toolchain` directive in go.mod,
+# so the runner's preinstalled go downloads exactly that toolchain (verified by
+# the Go checksum database). One source of truth, nothing to keep in sync here.
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Wrapper mains are up to date with the pinned upstream versions
+        run: make check-generated
+      - name: Vet and test all three modules
+        run: make test
+
+  # Rebuild stock upstream step-ca and require it to equal Smallstep's official
+  # release byte for byte (linux/amd64 and linux/armv7). This is what lets the
+  # wrapper binaries replace the upstream ones that used to be vendored.
+  pipeline-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: make verify-pipeline
+
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # git describe needs tags for the version string
+      - name: Two builds of this commit must be byte-for-byte identical
+        run: make repro-check
+      - name: Wrapper differs from the official release only by our driver module
+        run: make depdelta
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
