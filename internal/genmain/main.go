@@ -81,23 +81,36 @@ func run(args []string, stdout io.Writer) error {
 }
 
 // upstreamModule returns the module cache directory and version of module as
-// resolved by the wrapper module's build list.
+// resolved by the wrapper module's build list. The module is downloaded first:
+// on a clean machine (CI) `go list -m` reports an empty Dir for modules that are
+// not in the module cache yet.
 func upstreamModule(wrapperDir, module string) (dir, version string, err error) {
-	cmd := exec.Command("go", "list", "-m", "-f", "{{.Dir}}\t{{.Version}}", module)
-	cmd.Dir = wrapperDir
+	if _, err := goCommand(wrapperDir, "mod", "download", module); err != nil {
+		return "", "", err
+	}
+	out, err := goCommand(wrapperDir, "list", "-m", "-f", "{{.Dir}}\t{{.Version}}", module)
+	if err != nil {
+		return "", "", err
+	}
+	dir, version, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
+	if !ok || dir == "" || version == "" {
+		return "", "", fmt.Errorf("go list -m %s: unexpected output %q", module, out)
+	}
+	return dir, version, nil
+}
+
+func goCommand(dir string, args ...string) ([]byte, error) {
+	cmd := exec.Command("go", args...)
+	cmd.Dir = dir
 	out, err := cmd.Output()
 	if err != nil {
 		var ee *exec.ExitError
 		if errors.As(err, &ee) {
-			return "", "", fmt.Errorf("go list -m %s: %w: %s", module, err, ee.Stderr)
+			return nil, fmt.Errorf("go %s: %w: %s", strings.Join(args, " "), err, ee.Stderr)
 		}
-		return "", "", fmt.Errorf("go list -m %s: %w", module, err)
+		return nil, fmt.Errorf("go %s: %w", strings.Join(args, " "), err)
 	}
-	dir, version, ok := strings.Cut(strings.TrimSpace(string(out)), "\t")
-	if !ok || dir == "" || version == "" {
-		return "", "", fmt.Errorf("unexpected go list output %q", out)
-	}
-	return dir, version, nil
+	return out, nil
 }
 
 // transform returns upstream with a "generated" header and one extra blank
